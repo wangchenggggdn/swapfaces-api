@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "swapfaces-api",
+  "main": "src/index.js",
+  "compatibility_date": "2026-05-10",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "swapfaces",
+      "database_id": "0245000e-6e88-489b-891c-1b64b1185dd4",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}
