@@ -1,5 +1,7 @@
 const LOGIN_URL = "https://api.swapfaces.ai/api/account/login";
 const DETAIL_URL = "https://api.swapfaces.ai/api/account/detail?website=swapfaces";
+const IMAGE_TO_IMAGE_URL = "https://api.swapfaces.ai/api/image/image-to-image";
+const ACTION_HISTORY_URL = "https://api.swapfaces.ai/api/account/action/history";
 
 const DEFAULT_DEVICE = {
   userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0",
@@ -30,15 +32,28 @@ export default {
       return handleListAccounts(env);
     }
 
+    if (request.method === "GET" && url.pathname === "/accounts/random") {
+      return handleRandomAccount(env);
+    }
+
     if (request.method === "POST" && url.pathname === "/sync") {
       return handleSync(request, env, ctx);
+    }
+
+    if (request.method === "POST" && url.pathname === "/image-to-image") {
+      return handleImageToImage(request, env, ctx);
+    }
+
+    const imageTaskMatch = request.method === "GET" && url.pathname.match(/^\/image-tasks\/(.+)$/);
+    if (imageTaskMatch) {
+      return handleGetImageTask(imageTaskMatch[1], env);
     }
 
     return jsonResponse(
       {
         ok: false,
         error: "Not found",
-        routes: ["GET /health", "GET /accounts", "POST /sync"]
+        routes: ["GET /health", "GET /accounts", "GET /accounts/random", "POST /sync", "POST /image-to-image", "GET /image-tasks/:actionId"]
       },
       404
     );
@@ -66,14 +81,87 @@ async function handleSync(request, env, ctx) {
   }
 }
 
-async function handleListAccounts(env) {
-  const { results } = await env.DB.prepare(
-    `SELECT id, platform, external_id, username, credits, website, token, created_at, updated_at
-     FROM swapfaces_accounts
-     ORDER BY updated_at DESC`
-  ).all();
+async function handleImageToImage(request, env, ctx) {
+  try {
+    const body = await readJsonBody(request);
+    const params = buildImageToImageParams(body);
 
-  return jsonResponse({ ok: true, data: results });
+    const account = await env.DB.prepare(
+      `SELECT id, token FROM swapfaces_accounts ORDER BY RANDOM() LIMIT 1`
+    ).first();
+
+    if (!account?.token) {
+      return jsonResponse(
+        { ok: false, error: "No accounts in database, run POST /sync first" },
+        503
+      );
+    }
+
+    const result = await requestImageToImage(account.token, params);
+
+    const actionId = result?.data?.actionId != null
+      ? String(result.data.actionId)
+      : result?.actionId != null
+        ? String(result.actionId)
+        : null;
+    ctx.waitUntil(
+      Promise.all([
+        insertImageTask(env, actionId, account.token, account.id),
+        refreshAccountByToken(env, account.token, "image-to-image")
+      ])
+    );
+
+    return jsonResponse({ ok: true, data: result }, 201);
+  } catch (error) {
+    return jsonResponse(
+      {
+        ok: false,
+        error: error instanceof Error ? error.message : "Unknown error"
+      },
+      500
+    );
+  }
+}
+
+async function handleListAccounts(env) {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT id, platform, external_id, username, credits, website, token, created_at, updated_at
+       FROM swapfaces_accounts
+       ORDER BY updated_at DESC`
+    ).all();
+
+    return jsonResponse({ ok: true, data: results });
+  } catch (error) {
+    return jsonResponse(
+      {
+        ok: false,
+        error: error instanceof Error ? error.message : "Unknown error"
+      },
+      500
+    );
+  }
+}
+
+async function handleRandomAccount(env) {
+  try {
+    const result = await env.DB.prepare(
+      `SELECT id, platform, external_id, username, credits, website, token, created_at, updated_at
+       FROM swapfaces_accounts
+       ORDER BY RANDOM()
+       LIMIT 1`
+    ).first();
+
+    return jsonResponse({ ok: true, data: result ?? null });
+  } catch (error) {
+    return jsonResponse(
+      {
+        ok: false,
+        error: error instanceof Error ? error.message : "Unknown error"
+      },
+      500
+    );
+  }
 }
 
 async function syncSwapfacesAccount(env, overrides = {}) {
@@ -143,6 +231,40 @@ async function requestAccountDetail(token) {
   });
 
   return parseApiResponse(response, "Swapfaces account detail");
+}
+
+async function requestImageToImage(token, params) {
+  const response = await fetch(IMAGE_TO_IMAGE_URL, {
+    method: "POST",
+    headers: createBaseHeaders({
+      authorization: token,
+      "content-type": "application/json"
+    }),
+    body: JSON.stringify({
+      imageUrl: params.imageUrl,
+      style: params.style,
+      website: params.website
+    })
+  });
+
+  return parseApiResponse(response, "Swapfaces image-to-image");
+}
+
+async function refreshAccountByToken(env, token, source) {
+  try {
+    const detailJson = await requestAccountDetail(token);
+    const account = extractAccount(detailJson);
+
+    if (!account?.id) {
+      throw new Error("Swapfaces detail response did not include account data");
+    }
+
+    const record = normalizeRecord(account, token);
+    await upsertAccount(env, record, detailJson);
+    await logSync(env, record.id, source);
+  } catch (error) {
+    console.error("Failed to refresh account after image-to-image", error);
+  }
 }
 
 function createBaseHeaders(extraHeaders = {}) {
@@ -259,6 +381,77 @@ async function upsertAccount(env, record, detailPayload) {
     .run();
 }
 
+async function handleGetImageTask(actionId, env) {
+  try {
+    const task = await env.DB.prepare(
+      `SELECT token, state FROM image_tasks WHERE action_id = ? LIMIT 1`
+    ).bind(actionId).first();
+
+    if (!task) {
+      return jsonResponse({ ok: false, error: "Task not found" }, 404);
+    }
+
+    const historyJson = await requestActionHistory(task.token);
+
+    const list =
+      historyJson?.data?.actions ??
+      historyJson?.data?.list ??
+      (Array.isArray(historyJson?.data) ? historyJson.data : null) ??
+      historyJson?.list ??
+      (Array.isArray(historyJson?.result) ? historyJson.result : null) ??
+      [];
+
+    const matched = Array.isArray(list)
+      ? list.find((a) => String(a.actionId ?? a.id ?? "") === String(actionId))
+      : null;
+
+    if (matched && task.state !== 2) {
+      await env.DB.prepare(`UPDATE image_tasks SET state = 2 WHERE action_id = ?`)
+        .bind(actionId)
+        .run();
+    }
+
+    return jsonResponse({
+      code: historyJson.code,
+      message: historyJson.message,
+      result: matched ? [matched] : [],
+      totals: matched ? 1 : 0
+    });
+  } catch (error) {
+    return jsonResponse(
+      { ok: false, error: error instanceof Error ? error.message : "Unknown error" },
+      500
+    );
+  }
+}
+
+async function requestActionHistory(token) {
+  const response = await fetch(ACTION_HISTORY_URL, {
+    method: "POST",
+    headers: createBaseHeaders({
+      authorization: token,
+      "content-type": "application/json"
+    }),
+    body: JSON.stringify({
+      offset: 0,
+      limit: 30,
+      actionTypes: ["image_image_to_image"],
+      website: "swapfaces"
+    })
+  });
+
+  return parseApiResponse(response, "Swapfaces action history");
+}
+
+async function insertImageTask(env, actionId, token, userId) {
+  await env.DB.prepare(
+    `INSERT INTO image_tasks (action_id, token, user_id, state, created_at)
+     VALUES (?, ?, ?, 1, datetime('now'))`
+  )
+    .bind(actionId, token, userId ?? null)
+    .run();
+}
+
 async function logSync(env, accountId, source) {
   await env.DB.prepare(
     `INSERT INTO sync_logs (account_id, source, created_at)
@@ -274,6 +467,22 @@ async function readJsonBody(request) {
   }
 
   return request.json();
+}
+
+function buildImageToImageParams(body) {
+  if (!isPlainObject(body)) {
+    throw new Error("Request body must be a JSON object");
+  }
+
+  if (typeof body.imageUrl !== "string" || !body.imageUrl) {
+    throw new Error("Request body must include a non-empty imageUrl field");
+  }
+
+  return {
+    imageUrl: body.imageUrl,
+    style: typeof body.style === "string" && body.style ? body.style : "undress",
+    website: typeof body.website === "string" && body.website ? body.website : "swapfaces"
+  };
 }
 
 function pickDefined(source, keys) {
