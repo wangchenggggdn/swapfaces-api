@@ -4,11 +4,19 @@ Cloudflare Worker that logs into Swapfaces, fetches account detail, and stores t
 
 ## Endpoints
 
-- `GET /health`: simple health check.
-- `GET /accounts`: list synced accounts from D1.
-- `GET /accounts/random`: fetch one random record from D1.
-- `POST /sync`: call Swapfaces login and detail APIs, then upsert into D1.
-- `POST /image-to-image`: call Swapfaces image-to-image with an explicit token, then asynchronously refresh that account in D1.
+Base URL examples:
+
+- Local: `http://127.0.0.1:8787`
+- Production: `https://api.opengoon.art`
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/health` | Health check. |
+| `GET` | `/accounts` | List synced accounts from D1. |
+| `GET` | `/accounts/random` | Fetch one random account from D1. |
+| `POST` | `/sync` | Login to Swapfaces, fetch account detail, then upsert into D1. |
+| `POST` | `/image-to-image` | Use a random account token from D1 to call Swapfaces image-to-image, then async refresh account detail. |
+| `GET` | `/image-tasks/:actionId` | Query image task result by `actionId` using upstream action history. |
 
 ## Setup
 
@@ -61,27 +69,48 @@ You can also override parts of the login payload:
 
 ## Image To Image
 
-The `POST /image-to-image` endpoint requires the caller to explicitly provide the token to use.
+`POST /image-to-image` expects a JSON body and **does not accept a caller-provided token**.  
+The Worker selects one random account token from D1.
+
+Required field:
+
+- `imageUrl` (string, non-empty)
+
+Optional fields:
+
+- `style` (string, default: `undress`)
+- `website` (string, default: `swapfaces`)
+
+Example:
 
 ```bash
 curl -X POST https://api.opengoon.art/image-to-image \
-   -H 'Content-Type: application/json' \
-   -d '{
-      "token": "YOUR_SWAPFACES_TOKEN"
-   }'
+  -H 'Content-Type: application/json' \
+  -d '{
+    "imageUrl": "https://files.swapfaces.ai/Swapfaces.AI_20260510_44554a35-1085-47be-8bb5-dcc81d38c0fc.jpeg",
+    "style": "undress",
+    "website": "swapfaces"
+  }'
 ```
 
-The upstream request uses the fixed payload below:
+If the upstream call succeeds, the Worker inserts a task record into `image_tasks` and asynchronously refreshes account detail in D1.
+
+## Image Task Query
+
+Use `GET /image-tasks/:actionId` to query task status/result.
+
+```bash
+curl -X GET https://api.opengoon.art/image-tasks/1234567890
+```
+
+If the task does not exist in D1, response is `404`:
 
 ```json
 {
-   "imageUrl": "https://files.swapfaces.ai/Swapfaces.AI_20260510_44554a35-1085-47be-8bb5-dcc81d38c0fc.jpeg",
-   "style": "undress",
-   "website": "swapfaces"
+  "ok": false,
+  "error": "Task not found"
 }
 ```
-
-If the upstream image-to-image call succeeds, the Worker asynchronously calls the account detail endpoint and updates the matching account record in D1.
 
 ## Random Account
 
