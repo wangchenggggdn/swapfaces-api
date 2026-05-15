@@ -5,6 +5,8 @@ export const ACTION_HISTORY_URL = "https://api.swapfaces.ai/api/account/action/h
 export const UPLOAD_PRESIGN_URL = "https://api.swapfaces.ai/api/upload/presign";
 export const UNLIMIT_FACE_SWAPPER_DETECT_URL =
   "https://api.swapfaces.ai/api/image/unlimit-face-swapper/detect";
+export const UNLIMIT_FACE_SWAPPER_SWAP_URL =
+  "https://api.swapfaces.ai/api/image/unlimit-face-swapper/swap";
 export const ACTION_INFO_URL = "https://api.swapfaces.ai/api/action/info";
 
 export const DEFAULT_DEVICE = {

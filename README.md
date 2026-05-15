@@ -19,7 +19,26 @@ Base URL examples:
 | `POST` | `/upload/presign` | Use a random account token to call Swapfaces `POST /api/upload/presign` (same query string and browser-like headers as the official site). Response body matches upstream (`code`, `message`, `result`). |
 | `POST` | `/unlimit-face-swapper/detect` | Random account: call upstream face detect; writes `action_id` + **same** `token` into `image_tasks`. Response matches upstream (`code`, `message`, `actionId`). |
 | `GET` | `/action/info/:actionId` | Looks up `image_tasks` by `action_id`, uses **stored token** to call upstream `GET /api/action/info`. Optional query `website` (default `swapfaces`). Marks task `state=2` when `result.status === "success"`. |
+| `POST` | `/unlimit-face-swapper/swap` | Random account: upstream face **swap**; writes `action_id` + token to `image_tasks`. Response matches upstream (`code`, `message`, `actionId`, `consumedCredits`). |
+| `GET` | `/face-swapper/tasks/:actionId` | Uses **stored token** from `image_tasks` to call upstream `POST /api/account/action/history` with `actionTypes: ["image_unlimit_face_swapper"]`, returns the matching entry (same shape as `GET /image-tasks/:actionId`). |
 | `GET` | `/image-tasks/:actionId` | Query image task result by `actionId` using upstream action history. |
+
+## Curl 集成测试
+
+仓库内脚本 `scripts/test-api-curl.sh` 用 **HTTP 状态码**（及可选 **jq** 断言 JSON）做轻量用例。
+
+```bash
+# 本地（需先 npm run dev）
+BASE_URL=http://127.0.0.1:8787 npm run test:curl
+
+# 线上
+BASE_URL=https://api.opengoon.art npm run test:curl
+
+# 额外跑会调 Swapfaces 的链式用例（可能扣额度）
+RUN_UPSTREAM=1 BASE_URL=https://api.opengoon.art npm run test:curl
+```
+
+手写单条 curl 时，常用模式：`curl -sS -o body.txt -w '%{http_code}' ...` 得到状态码并保存 body，再用 `jq` 检查字段。
 
 ## Setup
 
@@ -150,6 +169,26 @@ curl -X POST https://api.opengoon.art/unlimit-face-swapper/detect \
   -d '{"imageUrl":"https://files.swapfaces.ai/your.jpeg","website":"swapfaces"}'
 
 curl -sS "https://api.opengoon.art/action/info/228212342?website=swapfaces"
+```
+
+## Face swapper swap & history task
+
+**`POST /unlimit-face-swapper/swap`** — JSON body:
+
+- `imageUrl` (required)
+- `items` (required): array of `{ "faceUrl", "sourceUrl" }`
+- `website` (optional, default `swapfaces`)
+
+Writes **`image_tasks`** with the returned `actionId` and the same random account `token` used for the swap call.
+
+**`GET /face-swapper/tasks/:actionId`** — loads `token` from `image_tasks`, then queries upstream history filtered to `image_unlimit_face_swapper`. When the matched row has `status === "success"`, updates `image_tasks.state` to `2`.
+
+```bash
+curl -X POST https://api.opengoon.art/unlimit-face-swapper/swap \
+  -H 'Content-Type: application/json' \
+  -d '{"imageUrl":"https://files.swapfaces.ai/base.jpeg","items":[{"faceUrl":"https://files.swapfaces.ai/face.png","sourceUrl":"https://files.swapfaces.ai/source.jpeg"}],"website":"swapfaces"}'
+
+curl -sS "https://api.opengoon.art/face-swapper/tasks/228214030"
 ```
 
 ## Image Task Query

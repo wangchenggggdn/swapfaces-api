@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "check": "find src -name '*.js' -exec node --check {} \\;"
+    "check": "find src -name '*.js' -exec node --check {} \\;",
+    "test:curl": "bash scripts/test-api-curl.sh"
   },
   "devDependencies": {
     "wrangler": "^4.16.1"

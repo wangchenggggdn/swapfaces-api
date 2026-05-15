@@ -5,6 +5,7 @@ import {
   IMAGE_TO_IMAGE_URL,
   LOGIN_URL,
   UNLIMIT_FACE_SWAPPER_DETECT_URL,
+  UNLIMIT_FACE_SWAPPER_SWAP_URL,
   UPLOAD_PRESIGN_URL
 } from "./constants.js";
 import { createBaseHeaders, parseApiResponse } from "../http.js";
@@ -74,19 +75,36 @@ export async function requestImageToImage(token, params) {
   return parseApiResponse(response, "Swapfaces image-to-image");
 }
 
-export async function requestActionHistory(token) {
+/**
+ * @param {string} token
+ * @param {{ offset?: number, limit?: number, actionTypes?: string[], website?: string }} [options]
+ * 当 actionTypes 含 `image_unlimit_face_swapper` 时使用与官网一致的 Chrome 请求头（换脸历史查询）。
+ */
+export async function requestActionHistory(token, options = {}) {
+  const payload = {
+    offset: typeof options.offset === "number" ? options.offset : 0,
+    limit: typeof options.limit === "number" ? options.limit : 30,
+    actionTypes:
+      Array.isArray(options.actionTypes) && options.actionTypes.length > 0
+        ? options.actionTypes
+        : ["image_image_to_image"],
+    website:
+      typeof options.website === "string" && options.website ? options.website : "swapfaces"
+  };
+
+  const useChrome =
+    Array.isArray(payload.actionTypes) &&
+    payload.actionTypes.includes("image_unlimit_face_swapper");
+
   const response = await fetch(ACTION_HISTORY_URL, {
     method: "POST",
-    headers: createBaseHeaders({
-      authorization: token,
-      "content-type": "application/json"
-    }),
-    body: JSON.stringify({
-      offset: 0,
-      limit: 30,
-      actionTypes: ["image_image_to_image"],
-      website: "swapfaces"
-    })
+    headers: useChrome
+      ? swapfacesChromeHeaders(token, { "content-type": "application/json" })
+      : createBaseHeaders({
+          authorization: token,
+          "content-type": "application/json"
+        }),
+    body: JSON.stringify(payload)
   });
 
   return parseApiResponse(response, "Swapfaces action history");
@@ -105,6 +123,22 @@ export async function requestUnlimitFaceSwapperDetect(token, params) {
   });
 
   return parseApiResponse(response, "Swapfaces unlimit face swapper detect");
+}
+
+export async function requestUnlimitFaceSwapperSwap(token, params) {
+  const response = await fetch(UNLIMIT_FACE_SWAPPER_SWAP_URL, {
+    method: "POST",
+    headers: swapfacesChromeHeaders(token, {
+      "content-type": "application/json"
+    }),
+    body: JSON.stringify({
+      imageUrl: params.imageUrl,
+      items: params.items,
+      website: params.website
+    })
+  });
+
+  return parseApiResponse(response, "Swapfaces unlimit face swapper swap");
 }
 
 export async function requestActionInfo(token, actionId, website = "swapfaces") {

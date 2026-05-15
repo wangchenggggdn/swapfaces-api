@@ -1,5 +1,10 @@
 import { handleListAccounts, handleRandomAccount } from "./handlers/accounts.js";
-import { handleGetActionInfo, handleUnlimitFaceSwapperDetect } from "./handlers/face-swapper.js";
+import {
+  handleGetActionInfo,
+  handleGetFaceSwapperTask,
+  handleUnlimitFaceSwapperDetect,
+  handleUnlimitFaceSwapperSwap
+} from "./handlers/face-swapper.js";
 import { handleGetImageTask, handleImageToImage } from "./handlers/image.js";
 import { handleSync } from "./handlers/sync-route.js";
 import { handleUploadPresign } from "./handlers/upload.js";
@@ -38,9 +43,19 @@ export default {
       return handleUnlimitFaceSwapperDetect(request, env, ctx);
     }
 
+    if (request.method === "POST" && url.pathname === "/unlimit-face-swapper/swap") {
+      return handleUnlimitFaceSwapperSwap(request, env, ctx);
+    }
+
     const actionInfoMatch = request.method === "GET" && url.pathname.match(/^\/action\/info\/(.+)$/);
     if (actionInfoMatch) {
       return handleGetActionInfo(request, actionInfoMatch[1], env);
+    }
+
+    const faceSwapperTaskMatch =
+      request.method === "GET" && url.pathname.match(/^\/face-swapper\/tasks\/(.+)$/);
+    if (faceSwapperTaskMatch) {
+      return handleGetFaceSwapperTask(faceSwapperTaskMatch[1], env);
     }
 
     const imageTaskMatch = request.method === "GET" && url.pathname.match(/^\/image-tasks\/(.+)$/);
@@ -60,7 +75,9 @@ export default {
           "POST /image-to-image",
           "POST /upload/presign",
           "POST /unlimit-face-swapper/detect",
+          "POST /unlimit-face-swapper/swap",
           "GET /action/info/:actionId",
+          "GET /face-swapper/tasks/:actionId",
           "GET /image-tasks/:actionId"
         ]
       },
