@@ -11,11 +11,14 @@ Base URL examples:
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/health` | Health check. |
+| `GET` | `/health` | Liveness probe. Returns **204 No Content** (no JSON body). |
 | `GET` | `/accounts` | List synced accounts from D1. |
 | `GET` | `/accounts/random` | Fetch one random account from D1. |
 | `POST` | `/sync` | Login to Swapfaces, fetch account detail, then upsert into D1. |
 | `POST` | `/image-to-image` | Use a random account token from D1 to call Swapfaces image-to-image, then async refresh account detail. |
+| `POST` | `/upload/presign` | Use a random account token to call Swapfaces `POST /api/upload/presign` (same query string and browser-like headers as the official site). Response body matches upstream (`code`, `message`, `result`). |
+| `POST` | `/unlimit-face-swapper/detect` | Random account: call upstream face detect; writes `action_id` + **same** `token` into `image_tasks`. Response matches upstream (`code`, `message`, `actionId`). |
+| `GET` | `/action/info/:actionId` | Looks up `image_tasks` by `action_id`, uses **stored token** to call upstream `GET /api/action/info`. Optional query `website` (default `swapfaces`). Marks task `state=2` when `result.status === "success"`. |
 | `GET` | `/image-tasks/:actionId` | Query image task result by `actionId` using upstream action history. |
 
 ## Setup
@@ -94,6 +97,60 @@ curl -X POST https://api.opengoon.art/image-to-image \
 ```
 
 If the upstream call succeeds, the Worker inserts a task record into `image_tasks` and asynchronously refreshes account detail in D1.
+
+## Upload presign
+
+`POST /upload/presign` **does not accept a caller-provided token**. The Worker picks a random account from D1 and calls Swapfaces with the same style of request as the web app (query `action_type` + `content_type`, `Content-Type: text/plain;charset=UTF-8`, Chrome-like headers, empty POST body).
+
+**Query parameters** (optional; defaults match the site):
+
+| Query | Default |
+| --- | --- |
+| `action_type` | `image_unlimit_face_swapper` |
+| `content_type` | `image/jpeg` (sent as `image%2Fjpeg` in the upstream URL) |
+
+You can also pass `action_type` / `content_type` (or camelCase `actionType` / `contentType`) in a JSON body; **query string wins** if both are present.
+
+**Successful response** is the upstream JSON (not wrapped in `{ ok, data }`), for example:
+
+```json
+{
+  "code": 200,
+  "message": "Success",
+  "result": {
+    "presignUrl": "https://files.swapfaces.ai/....jpeg",
+    "url": "https://files.swapfaces.ai/....jpeg"
+  }
+}
+```
+
+Example (defaults in query, same as upstream curl):
+
+```bash
+curl -X POST \
+  'https://api.opengoon.art/upload/presign?action_type=image_unlimit_face_swapper&content_type=image%2Fjpeg'
+```
+
+If no rows exist in `swapfaces_accounts`, the Worker returns HTTP **503** with body `{ "code": 503, "message": "...", "result": null }`.
+
+## Face swapper detect & action info
+
+Detect uses a **random** account token from D1, same pattern as `/upload/presign`. The returned `actionId` is stored in **`image_tasks`** together with that token so the follow-up call uses the **same** authorization.
+
+**`POST /unlimit-face-swapper/detect`** — JSON body:
+
+- `imageUrl` (required)
+- `website` (optional, default `swapfaces`)
+
+**`GET /action/info/:actionId`** — resolves the task in `image_tasks`, then calls upstream `GET /api/action/info?action_id=...&website=...`. Optional query: `website` (default `swapfaces`). Response body is upstream JSON. When `result.status === "success"`, the task row is updated to `state = 2`.
+
+```bash
+curl -X POST https://api.opengoon.art/unlimit-face-swapper/detect \
+  -H 'Content-Type: application/json' \
+  -d '{"imageUrl":"https://files.swapfaces.ai/your.jpeg","website":"swapfaces"}'
+
+curl -sS "https://api.opengoon.art/action/info/228212342?website=swapfaces"
+```
 
 ## Image Task Query
 

@@ -36,6 +36,16 @@ export function jsonResponse(payload, status = 200) {
   });
 }
 
+/** 与上游 Swapfaces API 一致的紧凑 JSON（无缩进）。 */
+export function swapfacesJsonResponse(payload, status = 200) {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: {
+      "content-type": "application/json; charset=UTF-8"
+    }
+  });
+}
+
 export async function readJsonBody(request) {
   if (!request.headers.get("content-type")?.includes("application/json")) {
     return null;

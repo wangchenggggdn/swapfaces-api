@@ -1,4 +1,5 @@
 import { handleListAccounts, handleRandomAccount } from "./handlers/accounts.js";
+import { handleGetActionInfo, handleUnlimitFaceSwapperDetect } from "./handlers/face-swapper.js";
 import { handleGetImageTask, handleImageToImage } from "./handlers/image.js";
 import { handleSync } from "./handlers/sync-route.js";
 import { handleUploadPresign } from "./handlers/upload.js";
@@ -10,7 +11,7 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/health") {
-      return jsonResponse({ ok: true, service: "swapfaces-api" });
+      return new Response(null, { status: 204 });
     }
 
     if (request.method === "GET" && url.pathname === "/accounts") {
@@ -33,6 +34,15 @@ export default {
       return handleUploadPresign(request, env, ctx);
     }
 
+    if (request.method === "POST" && url.pathname === "/unlimit-face-swapper/detect") {
+      return handleUnlimitFaceSwapperDetect(request, env, ctx);
+    }
+
+    const actionInfoMatch = request.method === "GET" && url.pathname.match(/^\/action\/info\/(.+)$/);
+    if (actionInfoMatch) {
+      return handleGetActionInfo(request, actionInfoMatch[1], env);
+    }
+
     const imageTaskMatch = request.method === "GET" && url.pathname.match(/^\/image-tasks\/(.+)$/);
     if (imageTaskMatch) {
       return handleGetImageTask(imageTaskMatch[1], env);
@@ -49,6 +59,8 @@ export default {
           "POST /sync",
           "POST /image-to-image",
           "POST /upload/presign",
+          "POST /unlimit-face-swapper/detect",
+          "GET /action/info/:actionId",
           "GET /image-tasks/:actionId"
         ]
       },

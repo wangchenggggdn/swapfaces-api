@@ -3,6 +3,9 @@ export const DETAIL_URL = "https://api.swapfaces.ai/api/account/detail?website=s
 export const IMAGE_TO_IMAGE_URL = "https://api.swapfaces.ai/api/image/image-to-image";
 export const ACTION_HISTORY_URL = "https://api.swapfaces.ai/api/account/action/history";
 export const UPLOAD_PRESIGN_URL = "https://api.swapfaces.ai/api/upload/presign";
+export const UNLIMIT_FACE_SWAPPER_DETECT_URL =
+  "https://api.swapfaces.ai/api/image/unlimit-face-swapper/detect";
+export const ACTION_INFO_URL = "https://api.swapfaces.ai/api/action/info";
 
 export const DEFAULT_DEVICE = {
   userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0",
