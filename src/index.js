@@ -2,6 +2,7 @@ import { handleListAccounts, handleRandomAccount } from "./handlers/accounts.js"
 import {
   handleGetActionInfo,
   handleGetFaceSwapperTask,
+  handleUnlimitFaceSwapperAutoFromTwo,
   handleUnlimitFaceSwapperDetect,
   handleUnlimitFaceSwapperSwap
 } from "./handlers/face-swapper.js";
@@ -47,6 +48,10 @@ export default {
       return handleUnlimitFaceSwapperSwap(request, env, ctx);
     }
 
+    if (request.method === "POST" && url.pathname === "/unlimit-face-swapper/swap-from-two") {
+      return handleUnlimitFaceSwapperAutoFromTwo(request, env, ctx);
+    }
+
     const actionInfoMatch = request.method === "GET" && url.pathname.match(/^\/action\/info\/(.+)$/);
     if (actionInfoMatch) {
       return handleGetActionInfo(request, actionInfoMatch[1], env);
@@ -76,6 +81,7 @@ export default {
           "POST /upload/presign",
           "POST /unlimit-face-swapper/detect",
           "POST /unlimit-face-swapper/swap",
+          "POST /unlimit-face-swapper/swap-from-two",
           "GET /action/info/:actionId",
           "GET /face-swapper/tasks/:actionId",
           "GET /image-tasks/:actionId"

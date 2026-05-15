@@ -147,6 +147,113 @@ export async function handleUnlimitFaceSwapperSwap(request, env, ctx) {
   }
 }
 
+const DETECT_POLL_MAX_ATTEMPTS = 22;
+const DETECT_POLL_INTERVAL_MS = 1000;
+
+/**
+ * 仅传底图 imageUrl + 素材脸 sourceUrl：先 detect 取脸部图，再 swap；全程同一 token。
+ * 仅将最终 swap 的 actionId 写入 image_tasks（可用 GET /face-swapper/tasks/:actionId 查结果）。
+ */
+export async function handleUnlimitFaceSwapperAutoFromTwo(request, env, ctx) {
+  try {
+    const body = await readJsonBody(request);
+    const params = buildTwoImageParams(body);
+
+    const account = await getRandomAccount(env);
+
+    if (!account?.token) {
+      return swapfacesJsonResponse(
+        {
+          code: 503,
+          message: "No accounts in database, run POST /sync first",
+          result: null
+        },
+        503
+      );
+    }
+
+    const { token, id: userId } = account;
+    const website = params.website;
+
+    const detectResult = await requestUnlimitFaceSwapperDetect(token, {
+      imageUrl: params.imageUrl,
+      website
+    });
+
+    if (detectResult?.code != null && detectResult.code !== 200) {
+      throw new Error(`Detect failed: ${JSON.stringify(detectResult)}`);
+    }
+
+    const detectActionId = extractActionIdFromResponse(detectResult);
+    if (!detectActionId) {
+      throw new Error("Detect response did not include actionId");
+    }
+
+    let faceUrl = null;
+    for (let i = 0; i < DETECT_POLL_MAX_ATTEMPTS; i++) {
+      const info = await requestActionInfo(token, detectActionId, website);
+      const status = info?.result?.status;
+
+      if (status === "success") {
+        faceUrl = parseFirstFaceUrlFromActionInfo(info);
+        if (!faceUrl) {
+          throw new Error("Detect succeeded but no faceUrls in response");
+        }
+        break;
+      }
+
+      const fail = String(status ?? "").toLowerCase();
+      if (["failed", "fail", "error", "canceled", "cancelled"].includes(fail)) {
+        throw new Error(`Face detect job failed: ${status}`);
+      }
+
+      await sleep(DETECT_POLL_INTERVAL_MS);
+    }
+
+    if (!faceUrl) {
+      throw new Error(
+        `Face detect timed out after ${DETECT_POLL_MAX_ATTEMPTS * DETECT_POLL_INTERVAL_MS}ms`
+      );
+    }
+
+    const swapResult = await requestUnlimitFaceSwapperSwap(token, {
+      imageUrl: params.imageUrl,
+      items: [{ faceUrl, sourceUrl: params.sourceUrl }],
+      website
+    });
+
+    if (swapResult?.code != null && swapResult.code !== 200) {
+      throw new Error(`Swap failed: ${JSON.stringify(swapResult)}`);
+    }
+
+    const swapActionId = extractActionIdFromResponse(swapResult);
+
+    ctx.waitUntil(
+      Promise.all([
+        insertImageTask(env, swapActionId, token, userId),
+        refreshAccountByToken(env, token, "unlimit-face-swapper-auto-two")
+      ])
+    );
+
+    const merged = {
+      ...(isPlainObject(swapResult) ? swapResult : {}),
+      detectActionId,
+      faceUrl
+    };
+
+    return swapfacesJsonResponse(merged, 200);
+  } catch (error) {
+    return swapfacesJsonResponse(
+      {
+        code: 500,
+        message: error instanceof Error ? error.message : "Unknown error",
+        result: null
+      },
+      500
+    );
+  }
+}
+
 export async function handleGetFaceSwapperTask(actionId, env) {
   try {
     const task = await env.DB.prepare(
@@ -243,4 +350,57 @@ function buildSwapParams(body) {
     items,
     website: typeof body.website === "string" && body.website ? body.website : "swapfaces"
   };
+}
+
+function buildTwoImageParams(body) {
+  if (!isPlainObject(body)) {
+    throw new Error("Request body must be a JSON object");
+  }
+
+  if (typeof body.imageUrl !== "string" || !body.imageUrl) {
+    throw new Error("Request body must include a non-empty imageUrl field");
+  }
+
+  if (typeof body.sourceUrl !== "string" || !body.sourceUrl) {
+    throw new Error("Request body must include a non-empty sourceUrl field");
+  }
+
+  return {
+    imageUrl: body.imageUrl,
+    sourceUrl: body.sourceUrl,
+    website: typeof body.website === "string" && body.website ? body.website : "swapfaces"
+  };
+}
+
+function extractActionIdFromResponse(obj) {
+  if (obj?.actionId != null) {
+    return String(obj.actionId);
+  }
+  if (obj?.data?.actionId != null) {
+    return String(obj.data.actionId);
+  }
+  return null;
+}
+
+function parseFirstFaceUrlFromActionInfo(info) {
+  const raw = info?.result?.response;
+  if (typeof raw !== "string" || !raw) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    const urls = parsed?.faceUrls;
+    if (Array.isArray(urls) && typeof urls[0] === "string" && urls[0]) {
+      return urls[0];
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
