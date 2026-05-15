@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "check": "node --check src/index.js"
+    "check": "find src -name '*.js' -exec node --check {} \\;"
   },
   "devDependencies": {
     "wrangler": "^4.16.1"
