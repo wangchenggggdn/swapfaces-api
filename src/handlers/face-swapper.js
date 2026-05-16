@@ -151,8 +151,53 @@ const DETECT_POLL_MAX_ATTEMPTS = 22;
 const DETECT_POLL_INTERVAL_MS = 1000;
 
 /**
- * 仅传底图 imageUrl + 素材脸 sourceUrl：先 detect 取脸部图，再 swap；全程同一 token。
- * 仅将最终 swap 的 actionId 写入 image_tasks（可用 GET /face-swapper/tasks/:actionId 查结果）。
+ * 对一张图发起 detect 并轮询 action/info，返回 actionId 与 faceUrls[0]。
+ * @param {string} label 用于错误信息（如 target / source）
+ */
+async function detectFaceUrlFromImage(token, imageUrl, website, label) {
+  const detectResult = await requestUnlimitFaceSwapperDetect(token, {
+    imageUrl,
+    website
+  });
+
+  if (detectResult?.code != null && detectResult.code !== 200) {
+    throw new Error(`Detect (${label}) failed: ${JSON.stringify(detectResult)}`);
+  }
+
+  const detectActionId = extractActionIdFromResponse(detectResult);
+  if (!detectActionId) {
+    throw new Error(`Detect (${label}) response did not include actionId`);
+  }
+
+  for (let i = 0; i < DETECT_POLL_MAX_ATTEMPTS; i++) {
+    const info = await requestActionInfo(token, detectActionId, website);
+    const status = info?.result?.status;
+
+    if (status === "success") {
+      const faceUrl = parseFirstFaceUrlFromActionInfo(info);
+      if (!faceUrl) {
+        throw new Error(`Detect (${label}) succeeded but no faceUrls in response`);
+      }
+      return { detectActionId, faceUrl };
+    }
+
+    const fail = String(status ?? "").toLowerCase();
+    if (["failed", "fail", "error", "canceled", "cancelled"].includes(fail)) {
+      throw new Error(`Face detect (${label}) job failed: ${status}`);
+    }
+
+    await sleep(DETECT_POLL_INTERVAL_MS);
+  }
+
+  throw new Error(
+    `Face detect (${label}) timed out after ${DETECT_POLL_MAX_ATTEMPTS * DETECT_POLL_INTERVAL_MS}ms`
+  );
+}
+
+/**
+ * 仅传 imageUrl（目标图）+ sourceUrl（来源图）：并行 detect 两张图的人脸，再 swap。
+ * swap items：faceUrl = 目标图人脸，sourceUrl = 来源图人脸（上游字段名仍为 sourceUrl）。
+ * 仅将最终 swap 的 actionId 写入 image_tasks。
  */
 export async function handleUnlimitFaceSwapperAutoFromTwo(request, env, ctx) {
   try {
@@ -175,50 +220,17 @@ export async function handleUnlimitFaceSwapperAutoFromTwo(request, env, ctx) {
     const { token, id: userId } = account;
     const website = params.website;
 
-    const detectResult = await requestUnlimitFaceSwapperDetect(token, {
-      imageUrl: params.imageUrl,
-      website
-    });
+    const [targetDetect, sourceDetect] = await Promise.all([
+      detectFaceUrlFromImage(token, params.imageUrl, website, "target"),
+      detectFaceUrlFromImage(token, params.sourceUrl, website, "source")
+    ]);
 
-    if (detectResult?.code != null && detectResult.code !== 200) {
-      throw new Error(`Detect failed: ${JSON.stringify(detectResult)}`);
-    }
-
-    const detectActionId = extractActionIdFromResponse(detectResult);
-    if (!detectActionId) {
-      throw new Error("Detect response did not include actionId");
-    }
-
-    let faceUrl = null;
-    for (let i = 0; i < DETECT_POLL_MAX_ATTEMPTS; i++) {
-      const info = await requestActionInfo(token, detectActionId, website);
-      const status = info?.result?.status;
-
-      if (status === "success") {
-        faceUrl = parseFirstFaceUrlFromActionInfo(info);
-        if (!faceUrl) {
-          throw new Error("Detect succeeded but no faceUrls in response");
-        }
-        break;
-      }
-
-      const fail = String(status ?? "").toLowerCase();
-      if (["failed", "fail", "error", "canceled", "cancelled"].includes(fail)) {
-        throw new Error(`Face detect job failed: ${status}`);
-      }
-
-      await sleep(DETECT_POLL_INTERVAL_MS);
-    }
-
-    if (!faceUrl) {
-      throw new Error(
-        `Face detect timed out after ${DETECT_POLL_MAX_ATTEMPTS * DETECT_POLL_INTERVAL_MS}ms`
-      );
-    }
+    const targetFaceUrl = targetDetect.faceUrl;
+    const targetFaceUrl2 = sourceDetect.faceUrl;
 
     const swapResult = await requestUnlimitFaceSwapperSwap(token, {
       imageUrl: params.imageUrl,
-      items: [{ faceUrl, sourceUrl: params.sourceUrl }],
+      items: [{ faceUrl: targetFaceUrl, sourceUrl: targetFaceUrl2 }],
       website
     });
 
@@ -237,8 +249,12 @@ export async function handleUnlimitFaceSwapperAutoFromTwo(request, env, ctx) {
 
     const merged = {
       ...(isPlainObject(swapResult) ? swapResult : {}),
-      detectActionId,
-      faceUrl
+      detectActionId: targetDetect.detectActionId,
+      detectActionIdSource: sourceDetect.detectActionId,
+      targetFaceUrl,
+      targetFaceUrl2,
+      faceUrl: targetFaceUrl,
+      sourceFaceUrl: targetFaceUrl2
     };
 
     return swapfacesJsonResponse(merged, 200);

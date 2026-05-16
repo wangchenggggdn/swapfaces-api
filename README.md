@@ -22,7 +22,7 @@ Cloudflare Worker：向 Swapfaces 登录、拉取账号详情，将 token 与账
 | `POST` | `/unlimit-face-swapper/detect` | 随机 token 调人脸检测；将 `action_id` 与**同一** `token` 写入 `image_tasks`。 |
 | `GET` | `/action/info/:actionId` | 按 `action_id` 查 `image_tasks` 取 token，调官网 `action/info`；成功时 `state=2`。 |
 | `POST` | `/unlimit-face-swapper/swap` | 随机 token 调换脸；`action_id` 与 token 写入 `image_tasks`。 |
-| `POST` | `/unlimit-face-swapper/swap-from-two` | 仅传 `imageUrl` + `sourceUrl`：内部先 detect 再轮询 `action/info` 取脸部图，再调 swap；**仅将 swap 的 actionId** 写入 `image_tasks`，可用 `GET /face-swapper/tasks/:actionId` 查结果。 |
+| `POST` | `/unlimit-face-swapper/swap-from-two` | 仅传 `imageUrl` + `sourceUrl`：**并行**对两张图 detect 取人脸，再 swap；**仅将 swap 的 actionId** 写入 `image_tasks`。 |
 | `GET` | `/face-swapper/tasks/:actionId` | 用表中 token 查官网 action history（`image_unlimit_face_swapper`）；形态类似 `GET /image-tasks/:actionId`。 |
 | `GET` | `/image-tasks/:actionId` | 用表中 token 查官网 history（`image_image_to_image`）。 |
 
@@ -171,27 +171,27 @@ curl -sS "https://api.opengoon.art/action/info/228212342?website=swapfaces"
 
 ## 两张图一键换脸（swap-from-two）
 
-<!-- 同步流水线：Worker 内轮询 detect 完成，最长约 22s 间隔轮询 + 若干次上游请求，注意平台请求超时 -->
+<!-- 目标图 imageUrl、来源图 sourceUrl 各走一次 detect，Promise.all 并行；再 swap -->
 
-只需传**底图** `imageUrl` 与**要换上的脸图** `sourceUrl`（均为可访问的图片 URL）。Worker 使用**同一**随机账号 token：
+传**目标图** `imageUrl` 与**来源图** `sourceUrl`（均为可访问的图片 URL）。Worker 使用**同一**随机账号 token：
 
-1. 调用 `POST .../unlimit-face-swapper/detect`（仅 `imageUrl`）拿到 `actionId`；
-2. 轮询官网 `GET /api/action/info` 直到成功，从 `result.response` 的 JSON 中解析 `faceUrls[0]`；
-3. 调用 `POST .../unlimit-face-swapper/swap`，body 为 `imageUrl` + `items: [{ faceUrl: 上一步脸部图, sourceUrl: 你传入的 sourceUrl }]`。
+1. **并行**：对 `imageUrl` detect → `targetFaceUrl`（目标图上要被替换的人脸位置）；
+2. **并行**：对 `sourceUrl` detect → `targetFaceUrl2`（来源图上要换上去的人脸位置）；
+3. 两步都成功后调用 swap：`imageUrl` + `items: [{ faceUrl: targetFaceUrl, sourceUrl: targetFaceUrl2 }]`（上游字段名仍为 `sourceUrl`，值为来源图 detect 出的人脸 URL）。
 
-仅将**最终 swap** 返回的 `actionId` 写入 `image_tasks`（与单独调 swap 一致，便于 `GET /face-swapper/tasks/:actionId` 查询）。
+仅将**最终 swap** 的 `actionId` 写入 `image_tasks`。
 
 - **必填**：`imageUrl`、`sourceUrl`
 - **可选**：`website`（默认 `swapfaces`）
 
-成功时响应体在官网 swap 字段基础上附加 `detectActionId`、`faceUrl`（检测得到的脸部图 URL）。
+成功时响应在官网 swap 字段基础上附加：`detectActionId`（目标图 detect）、`detectActionIdSource`（来源图 detect）、`targetFaceUrl`、`targetFaceUrl2`（及别名 `faceUrl`、`sourceFaceUrl`）。
 
 ```bash
 curl -X POST https://api.opengoon.art/unlimit-face-swapper/swap-from-two \
   -H 'Content-Type: application/json' \
   -d '{
-    "imageUrl": "https://files.swapfaces.ai/Swapfaces.AI_20260514_4e3af827-37f8-4fc9-bc85-0c4610519c85.jpeg",
-    "sourceUrl": "https://th.bing.com/th/id/R.26827e0151c0531bad4f21946b7b87b8?rik=F1opdoze1djecA&riu=http%3a%2f%2f5b0988e595225.cdn.sohucs.com%2fimages%2f20190906%2f5f42c11920ba4d26ba08ffb5a324569f.jpeg&ehk=OK5%2f9D8vrhkq4XJ%2bhBBbQqNTtbwMQwiJ70ajK4%2baeq4%3d&risl=&pid=ImgRaw&r=0",
+    "imageUrl": "https://picx.zhimg.com/v2-4d534ac6c6d54992d82e9ab6e7e4f839_r.jpg?source=1def8aca",
+    "sourceUrl": "https://www.customerparadigm.com/images/photography/colorado/Boulder-Denver/Professional-Headshots/professional-photographer-boulder-colorado-fiona.jpg",
     "website": "swapfaces"
   }'
 ```
