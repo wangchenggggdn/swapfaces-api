@@ -41,6 +41,26 @@ export async function upsertAccount(env, record, detailPayload) {
     .run();
 }
 
+/** 账号 credits 大于该值才算「健康」，计入池子目标数量 */
+export const POOL_MIN_CREDITS_EXCLUSIVE = 30;
+
+/** 池中至少需要这么多条健康账号 */
+export const POOL_TARGET_COUNT = 10;
+
+export async function countHealthyAccounts(env) {
+  const row = await env.DB.prepare(
+    `SELECT COUNT(*) AS c FROM swapfaces_accounts WHERE credits > ?`
+  )
+    .bind(POOL_MIN_CREDITS_EXCLUSIVE)
+    .first();
+  return Number(row?.c ?? 0);
+}
+
+export async function deleteAccountById(env, accountId) {
+  await env.DB.prepare(`DELETE FROM sync_logs WHERE account_id = ?`).bind(accountId).run();
+  await env.DB.prepare(`DELETE FROM swapfaces_accounts WHERE id = ?`).bind(accountId).run();
+}
+
 export async function logSync(env, accountId, source) {
   await env.DB.prepare(
     `INSERT INTO sync_logs (account_id, source, created_at)

@@ -6,7 +6,9 @@ export async function handleSync(request, env, ctx) {
   try {
     const body = await readJsonBody(request);
     const result = await syncSwapfacesAccount(env, body ?? {});
-    ctx.waitUntil(logSync(env, result.record.id, "manual"));
+    if (result.accountKept) {
+      ctx.waitUntil(logSync(env, result.record.id, "manual"));
+    }
     return jsonResponse({ ok: true, source: "manual", data: result }, 201);
   } catch (error) {
     return jsonResponse(
